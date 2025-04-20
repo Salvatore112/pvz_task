@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  pvz_service:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
