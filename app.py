@@ -1,47 +1,45 @@
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, EmailStr
-from typing import Optional, Dict
-import uuid
-import time
+from pydantic import BaseModel
+from typing import Optional, List, Dict
 from datetime import datetime
+import uuid
 
 app = FastAPI()
 security = HTTPBearer()
 
-fake_db = {
+# In-memory database
+db = {
     "users": {},
     "pvzs": {},
     "receptions": {},
     "products": {},
+    "tokens": {},
 }
 
 
-class User(BaseModel):
-    id: str
-    email: EmailStr
-    password: str
-    role: str
-    token: Optional[str] = None
-
-
+# Models
 class Token(BaseModel):
     token: str
 
 
 class UserRegister(BaseModel):
-    email: EmailStr
+    email: str
     password: str
     role: str
 
 
 class UserLogin(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 
 class DummyLogin(BaseModel):
     role: str
+
+
+class PVZCreate(BaseModel):
+    city: str
 
 
 class PVZ(BaseModel):
@@ -50,97 +48,263 @@ class PVZ(BaseModel):
     city: str
 
 
+class ReceptionCreate(BaseModel):
+    pvzId: str
+
+
+class Reception(BaseModel):
+    id: str
+    dateTime: str
+    pvzId: str
+    status: str
+
+
+class ProductCreate(BaseModel):
+    type: str
+    pvzId: str
+
+
+class Product(BaseModel):
+    id: str
+    dateTime: str
+    type: str
+    receptionId: str
+
+
+class PVZResponse(BaseModel):
+    pvz: PVZ
+    receptions: List[Dict]
+
+
+# Helper functions
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    user_id = db["tokens"].get(token)
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return db["users"][user_id]
+
+
+def get_open_reception(pvz_id: str):
+    for reception in db["receptions"].values():
+        if reception["pvzId"] == pvz_id and reception["status"] == "in_progress":
+            return reception
+    return None
+
+
 # Auth endpoints
-
-
 @app.post("/dummyLogin", response_model=Token)
 def dummy_login(data: DummyLogin):
     if data.role not in ["employee", "moderator"]:
         raise HTTPException(status_code=400, detail="Invalid role")
 
     token = str(uuid.uuid4())
+    user_id = str(uuid.uuid4())
+
+    db["users"][user_id] = {
+        "id": user_id,
+        "role": data.role,
+    }
+    db["tokens"][token] = user_id
+
     return {"token": token}
 
 
-@app.post("/register", response_model=User)
+@app.post("/register", status_code=201)
 def register(user: UserRegister):
     if user.role not in ["employee", "moderator"]:
         raise HTTPException(status_code=400, detail="Invalid role")
 
-    if user.email in fake_db["users"]:
-        raise HTTPException(status_code=400, detail="Email already registered")
+    for existing_user in db["users"].values():
+        if existing_user.get("email") == user.email:
+            raise HTTPException(status_code=400, detail="Email already registered")
 
     user_id = str(uuid.uuid4())
-    token = str(uuid.uuid4())
-
-    new_user = {
+    db["users"][user_id] = {
         "id": user_id,
         "email": user.email,
         "password": user.password,
         "role": user.role,
-        "token": token,
     }
 
-    fake_db["users"][user.email] = new_user
-    return new_user
+    return {"id": user_id, "email": user.email, "role": user.role}
 
 
 @app.post("/login", response_model=Token)
 def login(user: UserLogin):
-    if user.email not in fake_db["users"]:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+    for existing_user in db["users"].values():
+        if existing_user.get("email") == user.email:
+            if existing_user.get("password") == user.password:
+                token = str(uuid.uuid4())
+                db["tokens"][token] = existing_user["id"]
+                return {"token": token}
 
-    db_user = fake_db["users"][user.email]
-
-    if db_user["password"] != user.password:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    token = str(uuid.uuid4())
-    db_user["token"] = token
-    return {"token": token}
+    raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
-# Helper function to verify tokens
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    token = credentials.credentials
-
-    for user in fake_db["users"].values():
-        if user["token"] == token:
-            return user
-
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Invalid authentication credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-
-
-@app.post("/pvz")
-def create_pvz(current_user: Dict = Depends(get_current_user)):
+@app.post("/pvz", response_model=PVZ, status_code=201)
+def create_pvz(pvz: PVZCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "moderator":
         raise HTTPException(status_code=403, detail="Only moderators can create PVZs")
-    return {"message": "PVZ creation endpoint"}
+
+    if pvz.city not in ["Москва", "Санкт-Петербург", "Казань"]:
+        raise HTTPException(
+            status_code=400,
+            detail="PVZ can only be created in Москва, Санкт-Петербург or Казань",
+        )
+
+    pvz_id = str(uuid.uuid4())
+    db["pvzs"][pvz_id] = {
+        "id": pvz_id,
+        "registrationDate": datetime.now().isoformat(),
+        "city": pvz.city,
+    }
+
+    return db["pvzs"][pvz_id]
 
 
-@app.get("/pvz")
-def get_pvz_list(current_user: Dict = Depends(get_current_user)):
-    return {"message": "PVZ list endpoint"}
+@app.get("/pvz", response_model=List[PVZResponse])
+def get_pvz_list(
+    startDate: Optional[str] = None,
+    endDate: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=30),
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user["role"] not in ["employee", "moderator"]:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    result = []
+
+    for pvz in db["pvzs"].values():
+        receptions_data = []
+
+        for reception in db["receptions"].values():
+            if reception["pvzId"] == pvz["id"]:
+                # Filter by date if provided
+                reception_date = datetime.fromisoformat(reception["dateTime"])
+                if startDate and endDate:
+                    start_date = datetime.fromisoformat(startDate)
+                    end_date = datetime.fromisoformat(endDate)
+                    if not (start_date <= reception_date <= end_date):
+                        continue
+
+                products = [
+                    p
+                    for p in db["products"].values()
+                    if p["receptionId"] == reception["id"]
+                ]
+
+                receptions_data.append({"reception": reception, "products": products})
+
+        result.append({"pvz": pvz, "receptions": receptions_data})
+
+    start = (page - 1) * limit
+    end = start + limit
+    return result[start:end]
 
 
-@app.post("/receptions")
-def create_reception(current_user: Dict = Depends(get_current_user)):
+@app.post("/pvz/{pvzId}/close_last_reception", response_model=Reception)
+def close_last_reception(pvzId: str, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "employee":
+        raise HTTPException(
+            status_code=403, detail="Only employees can close receptions"
+        )
+
+    if pvzId not in db["pvzs"]:
+        raise HTTPException(status_code=404, detail="PVZ not found")
+
+    open_reception = get_open_reception(pvzId)
+    if not open_reception:
+        raise HTTPException(status_code=400, detail="No open reception found")
+
+    open_reception["status"] = "close"
+    return open_reception
+
+
+@app.post("/pvz/{pvzId}/delete_last_product")
+def delete_last_product(pvzId: str, current_user: dict = Depends(get_current_user)):
+    if current_user["role"] != "employee":
+        raise HTTPException(
+            status_code=403, detail="Only employees can delete products"
+        )
+
+    if pvzId not in db["pvzs"]:
+        raise HTTPException(status_code=404, detail="PVZ not found")
+
+    open_reception = get_open_reception(pvzId)
+    if not open_reception:
+        raise HTTPException(status_code=400, detail="No open reception found")
+
+    products = [
+        p for p in db["products"].values() if p["receptionId"] == open_reception["id"]
+    ]
+
+    if not products:
+        raise HTTPException(status_code=400, detail="No products to delete")
+
+    last_product = products[-1]
+    del db["products"][last_product["id"]]
+
+    return {"message": "Product deleted", "product": last_product}
+
+
+@app.post("/receptions", response_model=Reception, status_code=201)
+def create_reception(
+    reception: ReceptionCreate, current_user: dict = Depends(get_current_user)
+):
     if current_user["role"] != "employee":
         raise HTTPException(
             status_code=403, detail="Only employees can create receptions"
         )
-    return {"message": "Reception creation endpoint"}
+
+    if reception.pvzId not in db["pvzs"]:
+        raise HTTPException(status_code=404, detail="PVZ not found")
+
+    if get_open_reception(reception.pvzId):
+        raise HTTPException(
+            status_code=400, detail="There is already an open reception"
+        )
+
+    reception_id = str(uuid.uuid4())
+    db["receptions"][reception_id] = {
+        "id": reception_id,
+        "dateTime": datetime.now().isoformat(),
+        "pvzId": reception.pvzId,
+        "status": "in_progress",
+    }
+
+    return db["receptions"][reception_id]
 
 
-@app.post("/products")
-def add_product(current_user: Dict = Depends(get_current_user)):
+@app.post("/products", response_model=Product, status_code=201)
+def add_product(product: ProductCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "employee":
         raise HTTPException(status_code=403, detail="Only employees can add products")
-    return {"message": "Product addition endpoint"}
+
+    if product.pvzId not in db["pvzs"]:
+        raise HTTPException(status_code=404, detail="PVZ not found")
+
+    open_reception = get_open_reception(product.pvzId)
+    if not open_reception:
+        raise HTTPException(status_code=400, detail="No open reception found")
+
+    if product.type not in ["электроника", "одежда", "обувь"]:
+        raise HTTPException(status_code=400, detail="Invalid product type")
+
+    product_id = str(uuid.uuid4())
+    db["products"][product_id] = {
+        "id": product_id,
+        "dateTime": datetime.now().isoformat(),
+        "type": product.type,
+        "receptionId": open_reception["id"],
+    }
+
+    return db["products"][product_id]
 
 
 if __name__ == "__main__":
