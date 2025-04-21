@@ -47,4 +47,4 @@ def generate_models(openapi_spec_path: str):
 if __name__ == "__main__":
     openapi_file = generate_openapi_json()
     generate_models(openapi_file)
-    print("Models generated successfully!")
+    print("Models & API generated successfully!")
