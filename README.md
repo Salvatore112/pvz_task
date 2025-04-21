@@ -19,3 +19,6 @@ sudo docker-compose run --rm pvz_service python myapp/generate_models.py
 ```bash
 sudo docker-compose run tests
 ```
+## Комментарии
+
+Реализована основная функциональность, а также дополнительные задания 1, 3, 4 и 5. Старался сделать 2-е задание по grpc, но не успел с ней полностью разобраться как следует.
