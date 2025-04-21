@@ -1,3 +1,4 @@
+# setup.py
 from setuptools import setup, find_packages
 
 setup(
@@ -10,5 +11,13 @@ setup(
         "pydantic",
         "prometheus-client",
         "PyYAML",
+        "datamodel-code-generator",
+        "httpx",
     ],
+    extras_require={
+        "dev": [
+            "pytest",
+            "requests",
+        ]
+    },
 )
