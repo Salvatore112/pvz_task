@@ -262,6 +262,7 @@ def test_full_workflow():
     )
     assert response.status_code == 400
 
+
 def test_metrics_endpoint():
     response = client.get("/metrics")
     assert response.status_code == 200
@@ -282,8 +283,7 @@ def test_get_pvz_list_with_filters():
     create_reception(employee_token, pvz_id)
 
     response = client.get(
-        "/pvz",
-        headers={"Authorization": f"Bearer {moderator_token}"}
+        "/pvz", headers={"Authorization": f"Bearer {moderator_token}"}
     )
     assert response.status_code == 200
     assert len(response.json()) >= 1
@@ -296,6 +296,7 @@ def test_get_pvz_list_with_filters():
         headers={"Authorization": f"Bearer {moderator_token}"},
     )
     assert response.status_code == 200
+
 
 def test_add_product_invalid_type():
     moderator_token = get_auth_token("moderator")
@@ -354,16 +355,15 @@ def test_create_reception_invalid_pvz():
 def test_register_invalid_role():
     email = f"test_{uuid.uuid4()}@example.com"
     response = client.post(
-        "/register", 
-        json={"email": email, "password": "password", "role": "invalid_role"}
+        "/register",
+        json={"email": email, "password": "password", "role": "invalid_role"},
     )
     assert response.status_code == 400
 
 
 def test_login_invalid_user():
     response = client.post(
-        "/login", 
-        json={"email": "nonexistent@example.com", "password": "password"}
+        "/login", json={"email": "nonexistent@example.com", "password": "password"}
     )
     assert response.status_code == 401
 
