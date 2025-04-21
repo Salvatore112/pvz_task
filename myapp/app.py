@@ -3,10 +3,31 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 from datetime import datetime
+from prometheus_client import Counter, Histogram, generate_latest, REGISTRY
+from fastapi.responses import PlainTextResponse
+from prometheus_client import start_http_server
 import uuid
+
 
 app = FastAPI()
 security = HTTPBearer()
+
+# Prometheus metrics
+REQUEST_COUNT = Counter(
+    "request_count", "App Request Count", ["method", "endpoint", "http_status"]
+)
+
+REQUEST_LATENCY = Histogram(
+    "request_latency_seconds", "Request latency", ["method", "endpoint"]
+)
+
+PVZ_CREATED = Counter("pvz_created_total", "Total number of PVZs created")
+
+RECEPTIONS_CREATED = Counter(
+    "receptions_created_total", "Total number of receptions created"
+)
+
+PRODUCTS_ADDED = Counter("products_added_total", "Total number of products added")
 
 # In-memory database
 db = {
@@ -96,6 +117,28 @@ def get_open_reception(pvz_id: str):
     return None
 
 
+# Add middleware for metrics
+@app.middleware("http")
+async def monitor_requests(request, call_next):
+    method = request.method
+    endpoint = request.url.path
+
+    if endpoint == "/metrics":
+        return await call_next(request)
+
+    with REQUEST_LATENCY.labels(method, endpoint).time():
+        response = await call_next(request)
+        REQUEST_COUNT.labels(method, endpoint, response.status_code).inc()
+
+    return response
+
+
+# Metrics endpoint
+@app.get("/metrics")
+async def metrics():
+    return PlainTextResponse(generate_latest(REGISTRY))
+
+
 # Auth endpoints
 @app.post("/dummyLogin", response_model=Token)
 def dummy_login(data: DummyLogin):
@@ -146,6 +189,7 @@ def login(user: UserLogin):
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
 
+# PVZ endpoints
 @app.post("/pvz", response_model=PVZ, status_code=201)
 def create_pvz(pvz: PVZCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "moderator":
@@ -164,6 +208,7 @@ def create_pvz(pvz: PVZCreate, current_user: dict = Depends(get_current_user)):
         "city": pvz.city,
     }
 
+    PVZ_CREATED.inc()
     return db["pvzs"][pvz_id]
 
 
@@ -185,7 +230,6 @@ def get_pvz_list(
 
         for reception in db["receptions"].values():
             if reception["pvzId"] == pvz["id"]:
-                # Filter by date if provided
                 reception_date = datetime.fromisoformat(reception["dateTime"])
                 if startDate and endDate:
                     start_date = datetime.fromisoformat(startDate)
@@ -253,6 +297,7 @@ def delete_last_product(pvzId: str, current_user: dict = Depends(get_current_use
     return {"message": "Product deleted", "product": last_product}
 
 
+# Reception endpoints
 @app.post("/receptions", response_model=Reception, status_code=201)
 def create_reception(
     reception: ReceptionCreate, current_user: dict = Depends(get_current_user)
@@ -278,9 +323,11 @@ def create_reception(
         "status": "in_progress",
     }
 
+    RECEPTIONS_CREATED.inc()
     return db["receptions"][reception_id]
 
 
+# Product endpoints
 @app.post("/products", response_model=Product, status_code=201)
 def add_product(product: ProductCreate, current_user: dict = Depends(get_current_user)):
     if current_user["role"] != "employee":
@@ -304,9 +351,11 @@ def add_product(product: ProductCreate, current_user: dict = Depends(get_current
         "receptionId": open_reception["id"],
     }
 
+    PRODUCTS_ADDED.inc()
     return db["products"][product_id]
 
 
+start_http_server(9000)
 if __name__ == "__main__":
     import uvicorn
 
