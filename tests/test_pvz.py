@@ -261,3 +261,113 @@ def test_full_workflow():
         headers={"Authorization": f"Bearer {employee_token}"},
     )
     assert response.status_code == 400
+
+def test_metrics_endpoint():
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "request_count" in response.text
+
+
+def test_invalid_token():
+    response = client.get("/pvz", headers={"Authorization": "Bearer invalid_token"})
+    assert response.status_code == 401
+
+
+def test_get_pvz_list_with_filters():
+    moderator_token = get_auth_token("moderator")
+    employee_token = get_auth_token("employee")
+
+    pvz_response = create_pvz(moderator_token, "Санкт-Петербург")
+    pvz_id = pvz_response.json()["id"]
+    create_reception(employee_token, pvz_id)
+
+    response = client.get(
+        "/pvz",
+        headers={"Authorization": f"Bearer {moderator_token}"}
+    )
+    assert response.status_code == 200
+    assert len(response.json()) >= 1
+
+    end_date = datetime.now().isoformat()
+    start_date = (datetime.now() - timedelta(days=1)).isoformat()
+    response = client.get(
+        "/pvz",
+        params={"startDate": start_date, "endDate": end_date},
+        headers={"Authorization": f"Bearer {moderator_token}"},
+    )
+    assert response.status_code == 200
+
+def test_add_product_invalid_type():
+    moderator_token = get_auth_token("moderator")
+    employee_token = get_auth_token("employee")
+
+    pvz_response = create_pvz(moderator_token)
+    pvz_id = pvz_response.json()["id"]
+
+    create_reception(employee_token, pvz_id)
+
+    response = client.post(
+        "/products",
+        json={"type": "invalid_type", "pvzId": pvz_id},
+        headers={"Authorization": f"Bearer {employee_token}"},
+    )
+    assert response.status_code == 400
+
+
+def test_delete_product_no_products():
+    moderator_token = get_auth_token("moderator")
+    employee_token = get_auth_token("employee")
+
+    pvz_response = create_pvz(moderator_token)
+    pvz_id = pvz_response.json()["id"]
+
+    create_reception(employee_token, pvz_id)
+
+    response = client.post(
+        f"/pvz/{pvz_id}/delete_last_product",
+        headers={"Authorization": f"Bearer {employee_token}"},
+    )
+    assert response.status_code == 400
+
+
+def test_close_reception_no_open():
+    moderator_token = get_auth_token("moderator")
+    employee_token = get_auth_token("employee")
+
+    pvz_response = create_pvz(moderator_token)
+    pvz_id = pvz_response.json()["id"]
+
+    response = client.post(
+        f"/pvz/{pvz_id}/close_last_reception",
+        headers={"Authorization": f"Bearer {employee_token}"},
+    )
+    assert response.status_code == 400
+
+
+def test_create_reception_invalid_pvz():
+    employee_token = get_auth_token("employee")
+
+    response = create_reception(employee_token, "invalid_pvz_id")
+    assert response.status_code == 404
+
+
+def test_register_invalid_role():
+    email = f"test_{uuid.uuid4()}@example.com"
+    response = client.post(
+        "/register", 
+        json={"email": email, "password": "password", "role": "invalid_role"}
+    )
+    assert response.status_code == 400
+
+
+def test_login_invalid_user():
+    response = client.post(
+        "/login", 
+        json={"email": "nonexistent@example.com", "password": "password"}
+    )
+    assert response.status_code == 401
+
+
+def test_get_pvz_list_unauthorized():
+    response = client.get("/pvz")
+    assert response.status_code == 403
